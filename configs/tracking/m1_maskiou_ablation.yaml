@@ -1,0 +1,13 @@
+tracker:
+  type: motion_iou
+  motion_free_ablation: true
+  iou_kind: mask
+  mask_iou_threshold: 0.3
+  center_dist_factor: 2.0
+  scene_cut_gap: 50
+  max_age_samples: 20
+  max_age_frames: 60
+  min_hits: 3
+  min_score_ship: 0.4
+  min_score_obstacle: 0.3
+  cost_weights: { iou: 1.0, query: 0.0, center: 0.0, area: 0.0, appearance: 0.0 }

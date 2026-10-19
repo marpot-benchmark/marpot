@@ -1,0 +1,13 @@
+torch>=2.7
+torchvision
+lightning==2.5.1.post0
+torchmetrics==1.8.2
+timm==1.0.15
+transformers==4.56.1
+numpy<2
+scipy
+pillow
+pyyaml
+matplotlib
+wandb
+pycocotools

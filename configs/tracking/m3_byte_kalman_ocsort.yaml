@@ -1,0 +1,21 @@
+tracker:
+  type: byte
+  iou_kind: mask
+  byte_enabled: true
+  high_thr: 0.5
+  low_thr: 0.1
+  kalman_enabled: true
+  nsa_kalman: true
+  ocm_enabled: true
+  oru_enabled: true
+  ocr_enabled: true
+  delta_t_cap: 10
+  scene_cut_gap: 50
+  max_age_samples: 20
+  max_age_frames: 60
+  min_hits: 3
+  mask_iou_threshold: 0.3
+  center_dist_factor: 2.0
+  min_score_ship: 0.4
+  min_score_obstacle: 0.3
+  cost_weights: { iou: 0.6, query: 0.0, center: 0.4, area: 0.0, appearance: 0.0 }

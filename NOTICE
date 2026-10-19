@@ -1,0 +1,21 @@
+MarPOT
+Copyright (c) 2026 MarPOT Authors
+
+This repository builds on EoMT (https://github.com/tue-mps/eomt),
+Copyright (c) 2025 Mobile Perception Systems Lab at TU/e, released under the
+MIT License (see LICENSE). Files taken from EoMT keep their original copyright
+header; several of them were modified for MarPOT.
+
+The following EoMT files contain portions adapted from third-party projects
+released under the Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt):
+
+  datasets/transforms.py
+      Detectron2, Facebook, Inc. and its affiliates
+  models/eomt.py
+      timm, Ross Wightman
+  training/lightning_module.py
+      torchmetrics, the PyTorch Lightning team
+      Mask2Former, Facebook, Inc. and its affiliates
+  training/mask_classification_loss.py
+      Hugging Face Transformers (Mask2Former loss), based on Mask2Former and
+      DETR by Facebook, Inc. and its affiliates
