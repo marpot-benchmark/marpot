@@ -87,9 +87,10 @@ def aggregate_conditions(inputs, data, split='val'):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--inputs',nargs='+',required=True)
     p.add_argument('--data',required=True);p.add_argument('--out',required=True)
-    p.add_argument('--split',default='val',choices=['val','test'])
     a=p.parse_args()
-    out=Path(a.out);dump(out/'summary.json',aggregate_conditions(a.inputs,a.data,a.split))
+    splits={json.loads(Path(x).read_text()).get('split') for x in a.inputs}
+    if len(splits)!=1 or None in splits:raise ValueError('residual inputs must come from one split (paper_statistics.py residual records it)')
+    out=Path(a.out);dump(out/'summary.json',aggregate_conditions(a.inputs,a.data,splits.pop()))
 
 
 if __name__=='__main__':main()

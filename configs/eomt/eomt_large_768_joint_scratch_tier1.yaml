@@ -1,60 +1,78 @@
+data:
+  class_path: datasets.sea_panoptic.SeaPanoptic
+  init_args:
+    batch_size: 2
+    copy_paste_enabled: true
+    copy_paste_max_instances: 3
+    copy_paste_prob: 0.5
+    img_size:
+    - 768
+    - 768
+    num_classes: 4
+    num_workers: 8
+    path: /path/to/data_panoptic_track
+    ref_frame_max_gap: 5
+    ref_max_sample_gap: 3
+    scale_range:
+    - 0.5
+    - 2.0
+    sequence_mode: true
+    stuff_classes:
+    - 2
+    - 3
+    use_gt_track_ids: true
+model:
+  class_path: training.mask_classification_panoptic.MaskClassificationPanoptic
+  init_args:
+    assoc_coefficient: 2.0
+    assoc_temperature: 0.07
+    attn_mask_annealing_enabled: true
+    attn_mask_annealing_end_steps:
+    - 23467
+    - 35200
+    - 46933
+    - 58667
+    attn_mask_annealing_start_steps:
+    - 11733
+    - 23467
+    - 35200
+    - 46933
+    class_weights:
+    - 2.0
+    - 2.0
+    - 1.0
+    - 1.0
+    eval_max_size: 1024
+    load_ckpt_class_head: false
+    load_ckpt_reid_head: false
+    lr: 0.0001
+    network:
+      class_path: models.eomt.EoMT
+      init_args:
+        encoder:
+          class_path: models.vit.ViT
+        grad_checkpointing: true
+        num_q: 200
+        reid_dim: 256
+        reid_enabled: true
 trainer:
-  max_epochs: 50
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      filename: best-{epoch:03d}-{step:06d}
+      mode: max
+      monitor: metrics/val_pq_all
+      save_last: true
+      save_top_k: 1
   devices: 2
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      name: sea_panoptic_joint_scratch_768_tier1_eomt_large
+      save_dir: logs
+  max_epochs: 50
   precision: bf16-mixed
   strategy:
     class_path: lightning.pytorch.strategies.DDPStrategy
     init_args:
       find_unused_parameters: true
-  logger:
-    class_path: lightning.pytorch.loggers.CSVLogger
-    init_args:
-      save_dir: "logs"
-      name: "sea_panoptic_joint_scratch_768_tier1_eomt_large"
-  callbacks:
-    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-      init_args:
-        monitor: "metrics/val_pq_all"
-        mode: max
-        save_top_k: 1
-        save_last: true
-        filename: "best-{epoch:03d}-{step:06d}"
-model:
-  class_path: training.mask_classification_panoptic.MaskClassificationPanoptic
-  init_args:
-    load_ckpt_class_head: False
-    load_ckpt_reid_head: False
-    lr: 1.0e-4
-    eval_max_size: 1024
-    class_weights: [2.0, 2.0, 1.0, 1.0]
-    attn_mask_annealing_enabled: True
-    attn_mask_annealing_start_steps: [13133, 26267, 39400, 52533]
-    attn_mask_annealing_end_steps:   [26267, 39400, 52533, 65667]
-    assoc_coefficient: 2.0
-    assoc_temperature: 0.07
-    network:
-      class_path: models.eomt.EoMT
-      init_args:
-        num_q: 200
-        reid_enabled: True
-        reid_dim: 256
-        grad_checkpointing: True
-        encoder:
-          class_path: models.vit.ViT
-data:
-  class_path: datasets.sea_panoptic.SeaPanoptic
-  init_args:
-    num_classes: 4
-    stuff_classes: [2, 3]
-    batch_size: 2
-    num_workers: 8
-    img_size: [768, 768]
-    scale_range: [0.5, 2.0]
-    path: /path/to/data_panoptic_track
-    sequence_mode: True
-    use_gt_track_ids: True
-    ref_frame_max_gap: 5
-    ref_max_sample_gap: 3
-    copy_paste_enabled: True
-    copy_paste_prob: 0.5
-    copy_paste_max_instances: 3

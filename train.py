@@ -19,7 +19,8 @@ p.add_argument('--out',required=True)
 p.add_argument('--init-checkpoint',default=None,
                help='COCO panoptic EoMT-L 640 weights (default: weights/coco_panoptic_eomt_large_640/'
                     'pytorch_model.bin under the repository root); the warm-start recipe '
-                    '(load_ckpt_class_head: True) requires its trained predecessor checkpoint here')
+                    'eomt_large_640_joint.yaml requires inference_state.pt of an '
+                    'eomt_large_640_track.yaml run here')
 p.add_argument('--batch',type=int,default=None)
 p.add_argument('--virtual-shards',type=int,default=None)
 p.add_argument('--workers',type=int,default=8)
@@ -47,7 +48,7 @@ if virtual==1:virtual=0
 if batch!=expected_batch:
     raise ValueError(f'physical batch {batch} changes frozen global batch {expected_batch}')
 if cfg['model']['init_args'].get('load_ckpt_class_head',False) and not a.init_checkpoint:
-    raise ValueError('warm-start recipe requires the NEW predecessor checkpoint explicitly')
+    raise ValueError('warm-start recipe requires the predecessor checkpoint (--init-checkpoint)')
 manifest=out/'run_manifest.json'
 init_path=Path(a.init_checkpoint or ROOT/'weights/coco_panoptic_eomt_large_640/pytorch_model.bin').resolve()
 identity=dict(recipe=str(a.recipe),recipe_sha256=sha256(a.recipe),data=str(a.data),

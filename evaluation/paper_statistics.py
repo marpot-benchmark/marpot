@@ -194,14 +194,21 @@ def residual(a):
     sys.path.insert(0,a.root)
     from datasets.sea_panoptic import SeaPanopticDataset
     from tracking import maskutil
-    ds=SeaPanopticDataset(a.data,a.split,transforms=None,sequence_mode=True,use_gt_track_ids=True)
+    summaries=[json.loads(Path(s).read_text()) for s in a.inputs]
+    splits={x['split'] for x in summaries}
+    if len(splits)!=1:raise ValueError('residual inputs come from different splits')
+    split=splits.pop()
+    ds=SeaPanopticDataset(a.data,split,transforms=None,sequence_mode=True,use_gt_track_ids=True)
     files=[];expected=0
-    for s in a.inputs:
-        f=Path(s);expected+=json.loads(f.read_text())['images'];files+=sorted(f.with_suffix('').glob('candidates/*.json.gz'))
+    for s,x in zip(a.inputs,summaries):
+        f=Path(s);expected+=x['images'];files+=sorted(f.with_suffix('').glob('candidates/*.json.gz'))
     if len(files)!=expected:raise ValueError('raw candidate cache incomplete')
     counts=collections.Counter();rows=[]
     for f in files:
-        r=json.load(gzip.open(f,'rt'));_,target=ds._build_sample(r['context']['image_index']);trace=r['trace']
+        r=json.load(gzip.open(f,'rt'));context=r['context']
+        if context['file_name']!=ds.samples[context['image_index']][0]:raise ValueError('residual frame differs from the split order')
+        _,target=ds._build_sample(context['image_index']);trace=r['trace']
+        if tuple(target['masks'].shape[-2:])!=(context['image_height'],context['image_width']):raise ValueError('residual frame size differs')
         for j,mask in enumerate(target['masks']):
             cid=int(target['labels'][j]);gt=mask.numpy().astype(bool);area=int(gt.sum())
             if cid not in (0,1) or area>=1024 or bool(target['is_crowd'][j]):continue
@@ -228,7 +235,7 @@ def residual(a):
                 if stages[key]<=.5:reason=label;break
             counts[reason]+=1;rows.append(dict(**r['context'],gt_segment_id=int(target['seg_ids'][j]),class_id=cid,
                 area=area,first_blocking_stage=reason,best_same_class_iou_by_stage=stages))
-    dump(Path(a.out)/'summary.json',dict(frames=len(files),counts=dict(counts),failures=rows,input_hashes={str(f):sha(f) for f in a.inputs}))
+    dump(Path(a.out)/'summary.json',dict(split=split,frames=len(files),counts=dict(counts),failures=rows,input_hashes={str(f):sha(f) for f in a.inputs}))
 
 
 def main():
@@ -237,7 +244,6 @@ def main():
     p.add_argument('--data');p.add_argument('--out',required=True)
     p.add_argument('--baseline',nargs='+');p.add_argument('--candidate',nargs='+');p.add_argument('--inputs',nargs='+')
     p.add_argument('--replicates',type=int,default=10000);p.add_argument('--seed',type=int,default=0)
-    p.add_argument('--split',default='val',choices=['val','test'],help='split of the residual inputs (residual only)')
     a=p.parse_args();Path(a.out).mkdir(parents=True,exist_ok=True);globals()[a.operation](a)
 
 

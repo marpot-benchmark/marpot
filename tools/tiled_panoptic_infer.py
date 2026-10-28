@@ -45,6 +45,17 @@ def select_tile_windows(
     return [windows[index] for index in indices]
 
 
+def select_density(centers, windows, k):
+    remaining = set(range(len(centers)))
+    selected = []
+    for _ in range(min(k, len(windows))):
+        hits = {i: {j for j in remaining if w[1] <= centers[j][0] < w[3] and w[0] <= centers[j][1] < w[2]} for i, w in enumerate(windows) if i not in selected}
+        chosen = max(hits, key=lambda i: (len(hits[i]), -i))
+        selected.append(chosen)
+        remaining -= hits[chosen]
+    return selected
+
+
 def select_tiles_by_evidence(
     evidence: np.ndarray,
     windows: Sequence[Tuple[int, int, int, int]],
@@ -819,11 +830,17 @@ def infer_tiled_panoptic(
         else []
     )
     all_windows = sliding_tiles(h, w, tile_size, tile_overlap)
+    if options.get("density", False):
+        centers = []
+        for det in detections:
+            x, y, bw, bh = maskutil.to_bbox(det["mask_rle"])
+            centers.append((x + bw / 2, y + bh / 2))
+        tile_indices = select_density(centers, all_windows, 3)
     full_thing_extract_s = time.perf_counter() - full_thing_started
     router_scores: List[float] = []
     router_diagnostics: Dict = {}
     router_started = time.perf_counter()
-    if tile_router is not None:
+    if tile_router is not None and not options.get("density", False):
         if options:
             if router_resolution != "native":
                 raise ValueError("supplement protocol requires native routing")

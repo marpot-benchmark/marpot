@@ -5,7 +5,7 @@ def eomt_specs():
                          selector=selector,window=window,k=k,options=options))
     for split in ('val','test'):
         add('full896',split,'full',tracking=split=='test')
-        add('query',split,tracking=split=='test',save_candidates=split=='val',raw_trace=split=='val')
+        add('query',split,tracking=split=='test',save_candidates=True,raw_trace=True)
         add('horizon',split,'horizon-row')
         add('center',split,'center')
         for seed in range(3):add(f'random{seed}',split,'random',seed=seed)
@@ -13,6 +13,7 @@ def eomt_specs():
         add('full_thr03',split,'full',full_threshold=.3)
         if split=='val':add('full_thr05',split,'full',full_threshold=.5)
         for size in (1344,1792):add(f'full{size}',split,'full',infer_size=size)
+        add('density',split,density=True)
         add('entropy',split,predictive_entropy=True)
     variants={
         'retained':{'query_set':'retained'},'score_qualified':{'query_set':'score_qualified'},
@@ -22,15 +23,17 @@ def eomt_specs():
         'semantic_prob':{'semantic_prob':True}}
     for name,opt in variants.items():add(name,'val',calibration_group='eomt_evidence_variants',**opt)
     add('retained','test',**variants['retained'])
-    add('query_raw','test',tracking=True,save_candidates=True,raw_trace=True)
+    add('val_min_recall','test',select_from='eomt_evidence_variants',select_rule='min_small_recall')
+    add('val_max_recall','test',select_from='eomt_evidence_variants',select_rule='max_small_recall')
     for k in (1,2,4):add(f'budget{k}','val',k=k)
     for window in (560,840,1400):
-        add(f'query_w{window}','val',window=window)
+        add(f'query_w{window}','val',window=window,save_candidates=True,raw_trace=True)
         add(f'all_w{window}','val','all',window=window)
-    for window in (560,840,1400):
         add(f'query_w{window}','test',window=window)
         add(f'all_w{window}','test','all',window=window)
-    assert len(rows)==54
+    add('center_w560','test','center',window=560)
+    for seed in range(3):add(f'random{seed}_w560','test','random',window=560,seed=seed)
+    assert len(rows)==61
     return rows
 
 

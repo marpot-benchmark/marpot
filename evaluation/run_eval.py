@@ -144,14 +144,6 @@ def main():
         os.environ['MARPOT_M2F_CONFIG']=str(Path(a.m2f_config).resolve())
         os.environ['MARPOT_M2F_CHECKPOINT']=str(mckpt.resolve())
         options['backend']='m2f';cp['m2f']=mrecord
-    if options.get('density') or options.get('predictive_entropy'):
-        try:
-            from tools.selector_adapter import install
-        except ModuleNotFoundError as error:
-            if error.name!='tools.selector_adapter':raise
-            raise RuntimeError('this spec needs tools/selector_adapter.py (predictive-entropy/density window '
-                               'selector), which is not present in this checkout') from None
-        install()
     import tools.analyze_panoptic_errors as evaluator
     import tools.reobs_core as core
     observer=NativeMetricObserver(ds,a.start,end)

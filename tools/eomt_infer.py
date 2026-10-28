@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -211,6 +211,42 @@ def _mask_nms(rles: List[Dict], scores: np.ndarray, iou_thr: float) -> List[int]
     return maskutil.nms(rles, scores, iou_thr)
 
 
+def _append_diagnostic_queries(sink, mask_logits, best_score, best_class, model,
+                               orig_h, orig_w, mask_bin_thr, max_candidates,
+                               xy_offset, canvas_size):
+    if sink is None:
+        return
+    candidates = (best_score >= 0.0).nonzero(as_tuple=False).squeeze(1)
+    if candidates.numel() > max_candidates:
+        _, order = best_score[candidates].topk(max_candidates)
+        candidates = candidates[order]
+    present = {item['query_index'] for item in sink}
+    missing = [int(q) for q in candidates.tolist() if int(q) not in present]
+    if missing:
+        selected = torch.as_tensor(missing, device=best_score.device, dtype=torch.long)
+        logits = F.interpolate(mask_logits[:, selected].float(), model.img_size, mode='bilinear')
+        logits = model.revert_resize_and_pad_logits_instance_panoptic(logits, [(orig_h, orig_w)])[0]
+        prob = logits.sigmoid()
+        masks = prob > mask_bin_thr
+        flat = masks.flatten(1).float()
+        areas = flat.sum(1)
+        mask_scores = (prob.flatten(1) * flat).sum(1) / (areas + 1e-6)
+        scores = best_score[selected] * mask_scores
+        masks_np, areas_np, scores_np = masks.cpu().numpy(), areas.cpu().numpy(), scores.cpu().numpy()
+        ox, oy = map(float, xy_offset)
+        height, width = (map(int, canvas_size) if canvas_size is not None else (orig_h, orig_w))
+        for index, query in enumerate(missing):
+            if areas_np[index] < 1:
+                continue
+            sink.append(dict(query_index=query, class_id=int(best_class[query].item()),
+                class_score=float(best_score[query].item()), score=float(scores_np[index]),
+                mask_rle_local=_encode_rle(masks_np[index]), xy_offset=[int(ox), int(oy)],
+                canvas_size=[height, width], score_keep=False, nms_keep=False,
+                diagnostic_only=True))
+    positions = {int(q): i for i, q in enumerate(candidates.tolist())}
+    sink.sort(key=lambda item: positions.get(item['query_index'], len(positions)))
+
+
 @torch.no_grad()
 def infer_raw_query_detections(
     model,
@@ -249,8 +285,11 @@ def infer_raw_query_detections(
     best_score, best_local = thing_probs.max(dim=-1)
     best_class = thing_idx[best_local]
 
-    keep = best_score >= (0.0 if raw_trace_sink is not None else prefilter_score)
+    keep = best_score >= prefilter_score
     if keep.sum() == 0:
+        if raw_trace_sink is not None:
+            raw_trace_sink.clear()
+            _append_diagnostic_queries(raw_trace_sink, mask_logits, best_score, best_class, model, orig_h, orig_w, mask_bin_thr, max_candidates, xy_offset, canvas_size)
         return []
     cand = keep.nonzero(as_tuple=False).squeeze(1)
     if cand.numel() > max_candidates:
@@ -354,182 +393,8 @@ def infer_raw_query_detections(
         kept_queries = {d["query_index"] for d in dets}
         for item in raw_trace_sink:
             item["nms_keep"] = item["query_index"] in kept_queries
+        _append_diagnostic_queries(raw_trace_sink, mask_logits, best_score, best_class, model, orig_h, orig_w, mask_bin_thr, max_candidates, xy_offset, canvas_size)
     return dets
-
-
-def classify_query_recoverability(
-    best_mask_iou_any: float,
-    best_same_class_iou: float,
-    best_matching_final_score: float,
-    score_threshold: float,
-    best_post_nms_iou: float,
-) -> str:
-    if best_mask_iou_any < 0.1:
-        return "no_mask_response"
-    if best_same_class_iou < 0.1:
-        return "classification_mismatch"
-    if best_same_class_iou <= 0.5:
-        return "poor_mask"
-    if best_matching_final_score < score_threshold:
-        return "score_below_threshold"
-    if best_post_nms_iou <= 0.5:
-        return "local_nms_lost"
-    return "post_nms_recoverable"
-
-
-@torch.no_grad()
-def infer_query_recoverability(
-    model,
-    img: torch.Tensor,
-    target_mask: torch.Tensor,
-    gt_class_id: int,
-    device: str,
-    thing_classes: Sequence[int] = (0, 1),
-    class_names: Optional[Dict[int, str]] = None,
-    score_thr_by_class: Optional[Dict[int, float]] = None,
-    mask_bin_thr: float = 0.5,
-    mask_nms_iou: float = 0.7,
-    xy_offset: Sequence[float] = (0.0, 0.0),
-    canvas_size: Optional[Sequence[int]] = None,
-) -> Tuple[Dict, List[Dict]]:
-    class_names = class_names or {int(c): str(c) for c in thing_classes}
-    score_thr_by_class = score_thr_by_class or {int(c): 0.95 for c in thing_classes}
-    img = img.to(device)
-    target_mask = torch.as_tensor(target_mask, device=device).bool()
-    orig_h, orig_w = int(img.shape[-2]), int(img.shape[-1])
-    if tuple(target_mask.shape) != (orig_h, orig_w):
-        raise ValueError("target_mask must match the crop image size")
-
-    transformed = model.resize_and_pad_imgs_instance_panoptic([img])
-    device_type = "cuda" if str(device).startswith("cuda") else "cpu"
-    with autocast(
-        dtype=torch.float16, device_type=device_type, enabled=device_type == "cuda"
-    ):
-        outputs = model(transformed)
-
-    mask_logits = F.interpolate(outputs[0][-1].float(), model.img_size, mode="bilinear")
-    mask_logits = model.revert_resize_and_pad_logits_instance_panoptic(
-        mask_logits, [(orig_h, orig_w)]
-    )[0]
-    mask_prob = mask_logits.sigmoid()
-    masks = mask_prob > mask_bin_thr
-    flat = masks.flatten(1)
-    areas = flat.sum(1)
-    target_area = target_mask.sum().clamp_min(1)
-    intersections = (masks & target_mask[None]).flatten(1).sum(1)
-    unions = areas + target_area - intersections
-    ious = intersections.float() / unions.clamp_min(1).float()
-    mask_scores = (mask_prob.flatten(1) * flat.float()).sum(1) / areas.clamp_min(
-        1
-    ).float()
-
-    class_prob = outputs[1][-1].float().softmax(dim=-1)[0]
-    thing_index = torch.as_tensor(list(thing_classes), device=device, dtype=torch.long)
-    thing_scores, thing_local = class_prob.index_select(-1, thing_index).max(dim=-1)
-    best_classes = thing_index[thing_local]
-    final_scores = thing_scores * mask_scores
-    valid = areas > 0
-    same_class = valid & best_classes.eq(int(gt_class_id))
-    matching = same_class & ious.gt(0.5)
-
-    def best_value(values: torch.Tensor, keep: torch.Tensor) -> float:
-        return float(values[keep].max().item()) if bool(keep.any()) else 0.0
-
-    best_any_index = int(torch.argmax(ious).item())
-    best_mask_iou_any = float(ious[best_any_index].item())
-    best_same_class_iou = best_value(ious, same_class)
-    best_same_index = (
-        int(torch.where(same_class, ious, torch.full_like(ious, -1)).argmax().item())
-        if bool(same_class.any())
-        else -1
-    )
-    best_matching_final_score = best_value(final_scores, matching)
-    gt_threshold = float(score_thr_by_class.get(int(gt_class_id), 0.95))
-
-    per_query_threshold = torch.full_like(final_scores, float("inf"))
-    for class_id, threshold in score_thr_by_class.items():
-        per_query_threshold[best_classes.eq(int(class_id))] = float(threshold)
-    passing = valid & final_scores.ge(per_query_threshold)
-    passing_indices = torch.nonzero(passing, as_tuple=False).flatten().tolist()
-
-    masks_np = masks[passing].cpu().numpy()
-    passing_classes = best_classes[passing].cpu().numpy()
-    passing_scores = final_scores[passing].cpu().numpy()
-    ox, oy = float(xy_offset[0]), float(xy_offset[1])
-    canvas_h, canvas_w = (
-        (int(canvas_size[0]), int(canvas_size[1]))
-        if canvas_size is not None
-        else (orig_h, orig_w)
-    )
-    rles, detections = [], []
-    for local_index, query_index in enumerate(passing_indices):
-        mask_np = masks_np[local_index]
-        if canvas_size is not None or ox or oy:
-            canvas = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
-            y0, x0 = int(round(oy)), int(round(ox))
-            canvas[y0 : y0 + orig_h, x0 : x0 + orig_w] = mask_np
-            rle = _encode_rle(canvas)
-        else:
-            rle = _encode_rle(mask_np)
-        rles.append(rle)
-        x, y, box_w, box_h = maskutil.to_bbox(rle)
-        detections.append(
-            {
-                "class_id": int(passing_classes[local_index]),
-                "class_name": class_names.get(
-                    int(passing_classes[local_index]),
-                    str(int(passing_classes[local_index])),
-                ),
-                "score": float(passing_scores[local_index]),
-                "bbox": [x, y, x + box_w, y + box_h],
-                "centroid": [x + box_w / 2, y + box_h / 2],
-                "area": float(maskutil.area(rle)),
-                "aspect_ratio": float(box_w / max(box_h, 1e-3)),
-                "mask_rle": rle,
-                "query_index": int(query_index),
-            }
-        )
-
-    keep_local = (
-        _mask_nms(rles, np.asarray(passing_scores), mask_nms_iou) if rles else []
-    )
-    kept_detections = [detections[index] for index in keep_local]
-    kept_queries = [passing_indices[index] for index in keep_local]
-    post_nms_same = [
-        query_index
-        for query_index in kept_queries
-        if int(best_classes[query_index]) == int(gt_class_id)
-    ]
-    best_post_nms_iou = (
-        max(float(ious[query_index]) for query_index in post_nms_same)
-        if post_nms_same
-        else 0.0
-    )
-    best_passing_iou = best_value(ious, same_class & passing)
-    premerge_stage = classify_query_recoverability(
-        best_mask_iou_any,
-        best_same_class_iou,
-        best_matching_final_score,
-        gt_threshold,
-        best_post_nms_iou,
-    )
-    diagnostic = {
-        "best_mask_iou_any": best_mask_iou_any,
-        "best_mask_any_class": int(best_classes[best_any_index]),
-        "best_mask_any_thing_score": float(thing_scores[best_any_index]),
-        "best_same_class_iou": best_same_class_iou,
-        "best_same_class_final_score": (
-            float(final_scores[best_same_index].item()) if best_same_index >= 0 else 0.0
-        ),
-        "best_matching_final_score": best_matching_final_score,
-        "best_passing_iou": best_passing_iou,
-        "best_post_nms_iou": best_post_nms_iou,
-        "score_threshold": gt_threshold,
-        "passing_queries": len(passing_indices),
-        "kept_after_nms": len(kept_queries),
-        "premerge_stage": premerge_stage,
-    }
-    return diagnostic, kept_detections
 
 
 def query_routing_evidence(
@@ -546,6 +411,14 @@ def query_routing_evidence(
     if not 0 <= min_query_score <= 1:
         raise ValueError("min_query_score must be in [0, 1]")
 
+    if (options or {}).get("predictive_entropy", False):
+        cp = class_logits.float().softmax(dim=-1)[..., :4]
+        mp = mask_logits.float().sigmoid()
+        semantic = torch.einsum("bqc,bqhw->bchw", cp, mp)
+        total = semantic.sum(1, keepdim=True)
+        probability = semantic / total.clamp_min(1e-12)
+        entropy = -(probability * probability.clamp_min(1e-12).log()).sum(1, keepdim=True) / __import__("math").log(4)
+        return torch.where(total > 1e-12, entropy, torch.zeros_like(entropy))
     probs = class_logits.float().softmax(dim=-1)
     thing_index = torch.as_tensor(
         list(thing_classes), device=probs.device, dtype=torch.long
@@ -729,118 +602,3 @@ def infer_panoptic_map(
         )
     result = (pred[..., 0].cpu().numpy(), pred[..., 1].cpu().numpy())
     return (*result, routing_map) if routing_map is not None else result
-
-
-@torch.no_grad()
-def infer_panoptic_argmax_detections(
-    model,
-    img: torch.Tensor,
-    device: str,
-    thing_classes: Sequence[int],
-    class_names: Dict[int, str],
-    score_thr_by_class: Optional[Dict[int, float]] = None,
-) -> List[Dict]:
-    img = img.to(device)
-    orig_h, orig_w = int(img.shape[-2]), int(img.shape[-1])
-    transformed = model.resize_and_pad_imgs_instance_panoptic([img])
-    with autocast(
-        dtype=torch.float16, device_type="cuda" if "cuda" in device else "cpu"
-    ):
-        outputs = model(transformed)
-    class_logits = outputs[1][-1]
-    mask_logits = F.interpolate(outputs[0][-1].float(), model.img_size, mode="bilinear")
-    mask_logits = model.revert_resize_and_pad_logits_instance_panoptic(
-        mask_logits, [(orig_h, orig_w)]
-    )
-    preds = model.to_per_pixel_preds_panoptic(
-        mask_logits,
-        class_logits,
-        model.stuff_classes,
-        model.mask_thresh,
-        model.overlap_thresh,
-    )[0]
-    cls_map = preds[..., 0].cpu().numpy()
-    seg_map_t = preds[..., 1]
-
-    q_scores = class_logits.softmax(dim=-1)[0].max(dim=-1).values
-    native = outputs[0][-1][0].sigmoid()
-    winner_native = (q_scores[:, None, None] * native).argmax(0)
-    h, w = winner_native.shape
-    seg_native = F.interpolate(
-        seg_map_t[None, None].float(), size=(h, w), mode="nearest"
-    )[0, 0].long()
-    q_scores_np = q_scores.float().cpu().numpy()
-    winner_np = winner_native.cpu().numpy()
-    seg_native_np = seg_native.cpu().numpy()
-    seg_map = seg_map_t.cpu().numpy()
-
-    if score_thr_by_class is None:
-        score_thr_by_class = {}
-
-    dets = []
-    for seg_id in np.unique(seg_map):
-        if seg_id < 0:
-            continue
-        m = seg_map == seg_id
-        cid = int(cls_map[m].flat[0])
-        if cid not in thing_classes:
-            continue
-        region = seg_native_np == seg_id
-        if region.any():
-            winners = winner_np[region]
-            winner_q = int(np.bincount(winners).argmax())
-            score = float(q_scores_np[winner_q])
-        else:
-            score = float(q_scores_np.max())
-        if score < score_thr_by_class.get(cid, 0.0):
-            continue
-        rle = _encode_rle(m)
-        x, y, w_b, h_b = maskutil.to_bbox(rle)
-        if w_b * h_b < 1:
-            continue
-        dets.append(
-            {
-                "class_id": cid,
-                "class_name": class_names.get(cid, str(cid)),
-                "score": score,
-                "bbox": [x, y, x + w_b, y + h_b],
-                "centroid": [x + w_b / 2, y + h_b / 2],
-                "area": float(maskutil.area(rle)),
-                "aspect_ratio": float(w_b / max(h_b, 1e-3)),
-                "mask_rle": rle,
-                "query_index": winner_q if region.any() else None,
-            }
-        )
-    return dets
-
-
-@torch.no_grad()
-def infer_seasurface_rle(
-    model,
-    img: torch.Tensor,
-    device: str,
-    seasurface_class: int = 2,
-) -> Optional[Dict]:
-    img = img.to(device)
-    orig_h, orig_w = int(img.shape[-2]), int(img.shape[-1])
-    transformed = model.resize_and_pad_imgs_instance_panoptic([img])
-    with autocast(
-        dtype=torch.float16, device_type="cuda" if "cuda" in device else "cpu"
-    ):
-        outputs = model(transformed)
-    mask_logits = F.interpolate(outputs[0][-1].float(), model.img_size, mode="bilinear")
-    mask_logits = model.revert_resize_and_pad_logits_instance_panoptic(
-        mask_logits, [(orig_h, orig_w)]
-    )
-    preds = model.to_per_pixel_preds_panoptic(
-        mask_logits,
-        outputs[1][-1],
-        model.stuff_classes,
-        model.mask_thresh,
-        model.overlap_thresh,
-    )[0]
-    cls_map = preds[..., 0].cpu().numpy()
-    sea = cls_map == seasurface_class
-    if sea.sum() == 0:
-        return None
-    return _encode_rle(sea)

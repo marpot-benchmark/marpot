@@ -537,7 +537,7 @@ test_dataloader = dict(
                 1333,
                 800,
             ), type='Resize'),
-            dict(backend_args=None, type='V601LoadPanopticAnnotations'),
+            dict(backend_args=None, type='MarPOTLoadPanopticAnnotations'),
             dict(
                 meta_keys=(
                     'img_id',
@@ -549,7 +549,7 @@ test_dataloader = dict(
                 type='PackDetInputs'),
         ],
         test_mode=True,
-        type='V601CocoPanopticDataset'),
+        type='MarPOTCocoPanopticDataset'),
     drop_last=False,
     num_workers=8,
     persistent_workers=True,
@@ -629,7 +629,7 @@ train_dataloader = dict(
         pipeline=[
             dict(to_float32=True, type='LoadImageFromFile'),
             dict(
-                type='V601LoadPanopticAnnotations',
+                type='MarPOTLoadPanopticAnnotations',
                 with_bbox=True,
                 with_mask=True,
                 with_seg=True),
@@ -656,7 +656,7 @@ train_dataloader = dict(
                 type='RandomCrop'),
             dict(type='PackDetInputs'),
         ],
-        type='V601CocoPanopticDataset'),
+        type='MarPOTCocoPanopticDataset'),
     num_workers=8,
     persistent_workers=True,
     sampler=dict(shuffle=True, type='DefaultSampler'))
@@ -742,7 +742,7 @@ val_dataloader = dict(
                 1333,
                 800,
             ), type='Resize'),
-            dict(backend_args=None, type='V601LoadPanopticAnnotations'),
+            dict(backend_args=None, type='MarPOTLoadPanopticAnnotations'),
             dict(
                 meta_keys=(
                     'img_id',
@@ -754,7 +754,7 @@ val_dataloader = dict(
                 type='PackDetInputs'),
         ],
         test_mode=True,
-        type='V601CocoPanopticDataset'),
+        type='MarPOTCocoPanopticDataset'),
     drop_last=False,
     num_workers=8,
     persistent_workers=True,

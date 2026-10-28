@@ -33,8 +33,6 @@ def build_identity(root, data_root, config, checkpoint, spec, options, samples,
                'tools/tiled_panoptic_infer.py', 'training/lightning_module.py']
     if spec['family'] == 'm2f':
         sources.append('tools/m2f_backend.py')
-    if (options.get('density') or options.get('predictive_entropy')) and (root / 'tools/selector_adapter.py').is_file():
-        sources.append('tools/selector_adapter.py')
     source_hashes = {name: file_sha(root / name) for name in sources}
     for name in ('run_eval.py', 'evaluation_identity.py'):
         source_hashes['evaluation/' + name] = file_sha(Path(__file__).parent / name)
